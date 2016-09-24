@@ -29,7 +29,6 @@ import (
 	"github.com/mediocregopher/radix.v2/redis"
 	"io/ioutil"
 	"strings"
-	"time"
 )
 
 var (
@@ -85,8 +84,6 @@ func NewRedisStorage(address string, db int, pass, mrshlerStr string, maxConns i
 		cacheCfg:        cacheCfg,
 		poolConfig:      connectionConf,
 		loadHistorySize: loadHistorySize}
-	go result.Ping()
-	go result.LEN()
 	return result, nil
 }
 
@@ -119,28 +116,22 @@ func (config *PoolConnectionConfig) PoolCreation(maxConns int) (*pool.Pool, erro
 }
 
 func (rs *RedisStorage) IncreasePool() error {
-
-	number_of_pools := (rs.poolConfig.maxConns - len(rs.db.Pool()))
-	pool, err := rs.poolConfig.PoolCreation(number_of_pools)
-
-	fmt.Printf("\tIncrease------pools = %s error %v \n", number_of_pools, err)
-	if err != nil {
-		return err
-	}
-	for conn := range pool.Pool() {
-		fmt.Printf("CONN add %v\n", conn)
+	number_of_pools := (rs.poolConfig.maxConns - rs.db.Avail())
+	utils.Logger.Warning(fmt.Sprintf("RedisClient increase pool size in %d (Current size is %d)",
+		number_of_pools, rs.db.Avail()))
+	for i := 0; i < number_of_pools; i++ {
+		conn, err := rs.db.Get()
+		if err != nil {
+			return err
+		}
 		rs.db.Put(conn)
 	}
 	return nil
 }
 
-func (rs *RedisStorage) LEN() {
-
-	for {
-		fmt.Printf("\t\tPool len is %s \n", len(rs.db.Pool()))
-		time.Sleep(1000 * time.Millisecond)
-	}
-}
+// This CMD function get a connection from the pool. Send the command and if
+// the problem is a redis.IOError didn't add the connection in the pool and
+// increase the pool with a new connection. Good for timeouts
 
 func (rs *RedisStorage) Cmd(cmd string, args ...interface{}) *redis.Resp {
 	c, err := rs.db.Get()
@@ -150,22 +141,11 @@ func (rs *RedisStorage) Cmd(cmd string, args ...interface{}) *redis.Resp {
 	result := c.Cmd(cmd, args...)
 	if result.IsType(redis.IOErr) {
 		rs.IncreasePool()
-		fmt.Printf("\n====================LOLA INCREASE POOL\n")
+		utils.Logger.Warning(fmt.Sprintf("RedisClient error '%s'", result.String()))
 		return rs.Cmd(cmd, args...)
 	}
 	rs.db.Put(c)
 	return result
-}
-
-func (rs *RedisStorage) Ping() {
-	fmt.Printf("MERDA! \n")
-
-	for {
-		time.Sleep(1000 * time.Millisecond)
-		fmt.Printf("PING START\n")
-		result := rs.Cmd("PING")
-		fmt.Printf("RESULT Of ping is %v", result)
-	}
 }
 
 func (rs *RedisStorage) Close() {
